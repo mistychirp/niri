@@ -36,11 +36,13 @@ pub struct Options {
     pub xray: bool,
     pub noise: Option<f64>,
     pub saturation: Option<f64>,
+    pub glass: bool,
 }
 
 impl Options {
     fn is_visible(&self) -> bool {
         self.xray
+            || self.glass
             || self.blur
             || self.noise.is_some_and(|x| x > 0.)
             || self.saturation.is_some_and(|x| x != 1.)
@@ -126,12 +128,18 @@ impl BackgroundEffect {
             xray: effect.xray == Some(true),
             noise: effect.noise,
             saturation: effect.saturation,
+            glass: effect.glass == Some(true),
         };
 
         // If we have some background effect but xray wasn't explicitly set, default it to true
         // since it's cheaper.
         if options.is_visible() && effect.xray.is_none() {
             options.xray = true;
+        }
+
+        // Glass refracts what's actually behind the surface, which xray can't provide.
+        if options.glass {
+            options.xray = false;
         }
 
         if self.options == options && self.corner_radius == corner_radius {
@@ -199,7 +207,7 @@ impl BackgroundEffect {
             // Render non-xray effect.
             let elem = self
                 .nonxray
-                .render(ns, params, blur_options, noise, saturation);
+                .render(ns, params, blur_options, noise, saturation, self.options.glass);
             push(elem.into());
         }
     }
@@ -314,7 +322,7 @@ pub fn render_for_tile(
         let mut surface_geo = surface_geo(states).unwrap_or_default().to_f64();
         surface_geo.loc += surface_off;
 
-        let Some(params) = render_params_for_tile(
+        let Some(mut params) = render_params_for_tile(
             geometry,
             scale,
             clip_to_geometry,
@@ -325,6 +333,14 @@ pub fn render_for_tile(
         ) else {
             return;
         };
+
+        // Glass needs a real shape for its rim, not the rectangles of a blur region, so it
+        // always follows the geometry and its corner radius.
+        if effect.glass == Some(true) {
+            params.geometry = geometry;
+            params.subregion = None;
+            params.clip = Some((geometry, CornerRadius::default()));
+        }
 
         let xray_pos = xray_pos.offset(params.geometry.loc - geometry.loc);
         background_effect.render(ctx, ns, params, xray_pos, push);

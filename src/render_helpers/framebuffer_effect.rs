@@ -38,7 +38,17 @@ pub struct FramebufferEffectElement {
     blur_options: Option<BlurOptions>,
     noise: f32,
     saturation: f32,
+    glass: bool,
 }
+
+/// Width of the curved glass rim, in logical pixels.
+const GLASS_BEZEL: f32 = 14.;
+/// How far the rim bends the background at its outer edge, in logical pixels.
+const GLASS_REFRACTION: f32 = 10.;
+/// Strength of the specular highlight along the rim.
+const GLASS_HIGHLIGHT: f32 = 0.35;
+/// Premultiplied white tint over the glass.
+const GLASS_TINT: [f32; 4] = [0.06, 0.06, 0.06, 0.06];
 
 #[derive(Debug)]
 struct Inner {
@@ -68,6 +78,7 @@ impl FramebufferEffect {
         blur_options: Option<BlurOptions>,
         noise: f32,
         saturation: f32,
+        glass: bool,
     ) -> FramebufferEffectElement {
         let (clip_geo, corner_radius) = params
             .clip
@@ -89,16 +100,13 @@ impl FramebufferEffect {
             blur_options,
             noise,
             saturation,
+            glass,
         }
     }
 }
 
 impl FramebufferEffectElement {
-    fn compute_uniforms(
-        &self,
-        crop: Rectangle<f64, Logical>,
-        transform: Transform,
-    ) -> [Uniform<'static>; 7] {
+    fn input_to_geo(&self, crop: Rectangle<f64, Logical>, transform: Transform) -> Mat3 {
         let offset = crop.loc - (self.clip_geo.loc - self.geometry.loc);
         let offset = Vec2::new(offset.x as f32, offset.y as f32);
         let crop_size = Vec2::new(crop.size.w as f32, crop.size.h as f32);
@@ -112,8 +120,15 @@ impl FramebufferEffectElement {
         let transform_mat = Mat3::from_translation(Vec2::new(0.5, 0.5))
             * Mat3::from_cols_array(transform.matrix().as_ref())
             * Mat3::from_translation(Vec2::new(-0.5, -0.5));
-        let input_to_clip_geo = input_to_clip_geo * transform_mat;
+        input_to_clip_geo * transform_mat
+    }
 
+    fn compute_uniforms(
+        &self,
+        crop: Rectangle<f64, Logical>,
+        transform: Transform,
+    ) -> [Uniform<'static>; 7] {
+        let input_to_clip_geo = self.input_to_geo(crop, transform);
         let clip_geo_size = (self.clip_geo.size.w as f32, self.clip_geo.size.h as f32);
 
         [
@@ -121,6 +136,30 @@ impl FramebufferEffectElement {
             Uniform::new("geo_size", clip_geo_size),
             Uniform::new("corner_radius", <[f32; 4]>::from(self.corner_radius)),
             mat3_uniform("input_to_geo", input_to_clip_geo),
+            Uniform::new("noise", self.noise),
+            Uniform::new("saturation", self.saturation),
+            Uniform::new("bg_color", [0f32, 0., 0., 0.]),
+        ]
+    }
+
+    fn compute_glass_uniforms(
+        &self,
+        crop: Rectangle<f64, Logical>,
+        transform: Transform,
+    ) -> [Uniform<'static>; 12] {
+        let input_to_clip_geo = self.input_to_geo(crop, transform);
+        let clip_geo_size = (self.clip_geo.size.w as f32, self.clip_geo.size.h as f32);
+
+        [
+            Uniform::new("niri_scale", self.scale),
+            Uniform::new("geo_size", clip_geo_size),
+            Uniform::new("corner_radius", <[f32; 4]>::from(self.corner_radius)),
+            mat3_uniform("input_to_geo", input_to_clip_geo),
+            mat3_uniform("geo_to_input", input_to_clip_geo.inverse()),
+            Uniform::new("bezel", GLASS_BEZEL),
+            Uniform::new("refraction", GLASS_REFRACTION),
+            Uniform::new("highlight", GLASS_HIGHLIGHT),
+            Uniform::new("glass_tint", GLASS_TINT),
             Uniform::new("noise", self.noise),
             Uniform::new("saturation", self.saturation),
             Uniform::new("bg_color", [0f32, 0., 0., 0.]),
@@ -388,11 +427,24 @@ impl RenderElement<GlesRenderer> for FramebufferEffectElement {
             clamped_dst.size.to_f64().upscale(dst_to_src).to_logical(1.),
         );
 
-        let program = Shaders::get_from_frame(frame).postprocess_and_clip.clone();
-        let uniforms = program
-            .is_some()
-            .then(|| self.compute_uniforms(crop, frame.transformation()));
-        let uniforms = uniforms.as_ref().map_or(&[][..], |x| &x[..]);
+        let shaders = Shaders::get_from_frame(frame);
+        let glass_program = shaders.glass.clone().filter(|_| self.glass);
+        let program = glass_program
+            .clone()
+            .or_else(|| shaders.postprocess_and_clip.clone());
+
+        let transform = frame.transformation();
+        let glass_uniforms;
+        let plain_uniforms;
+        let uniforms: &[Uniform<'_>] = if glass_program.is_some() {
+            glass_uniforms = self.compute_glass_uniforms(crop, transform);
+            &glass_uniforms
+        } else if program.is_some() {
+            plain_uniforms = self.compute_uniforms(crop, transform);
+            &plain_uniforms
+        } else {
+            &[]
+        };
 
         frame.render_texture_from_to(
             texture,

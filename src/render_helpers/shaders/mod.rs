@@ -15,6 +15,7 @@ pub struct Shaders {
     pub shadow: Option<ShaderProgram>,
     pub clipped_surface: Option<GlesTexProgram>,
     pub postprocess_and_clip: Option<GlesTexProgram>,
+    pub glass: Option<GlesTexProgram>,
     pub resize: Option<ShaderProgram>,
     pub gradient_fade: Option<GlesTexProgram>,
     pub blur: Option<BlurProgram>,
@@ -126,6 +127,29 @@ impl Shaders {
             })
             .ok();
 
+        let glass = renderer
+            .compile_custom_texture_shader(
+                concat!(include_str!("glass.frag"), include_str!("postprocess.frag")),
+                &[
+                    UniformName::new("niri_scale", UniformType::_1f),
+                    UniformName::new("geo_size", UniformType::_2f),
+                    UniformName::new("corner_radius", UniformType::_4f),
+                    UniformName::new("input_to_geo", UniformType::Matrix3x3),
+                    UniformName::new("geo_to_input", UniformType::Matrix3x3),
+                    UniformName::new("bezel", UniformType::_1f),
+                    UniformName::new("refraction", UniformType::_1f),
+                    UniformName::new("highlight", UniformType::_1f),
+                    UniformName::new("glass_tint", UniformType::_4f),
+                    UniformName::new("noise", UniformType::_1f),
+                    UniformName::new("saturation", UniformType::_1f),
+                    UniformName::new("bg_color", UniformType::_4f),
+                ],
+            )
+            .map_err(|err| {
+                warn!("error compiling glass shader: {err:?}");
+            })
+            .ok();
+
         let resize = compile_resize_program(renderer, include_str!("resize.frag"))
             .map_err(|err| {
                 warn!("error compiling resize shader: {err:?}");
@@ -153,6 +177,7 @@ impl Shaders {
             shadow,
             clipped_surface,
             postprocess_and_clip,
+            glass,
             resize,
             gradient_fade,
             blur,

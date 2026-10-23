@@ -1877,6 +1877,7 @@ mod tests {
                         blur: None,
                         noise: None,
                         saturation: None,
+                        glass: None,
                     },
                     popups: PopupsRule {
                         opacity: None,
@@ -1886,6 +1887,7 @@ mod tests {
                             blur: None,
                             noise: None,
                             saturation: None,
+                            glass: None,
                         },
                     },
                 },
@@ -1928,6 +1930,7 @@ mod tests {
                         blur: None,
                         noise: None,
                         saturation: None,
+                        glass: None,
                     },
                     popups: PopupsRule {
                         opacity: None,
@@ -1937,6 +1940,7 @@ mod tests {
                             blur: None,
                             noise: None,
                             saturation: None,
+                            glass: None,
                         },
                     },
                 },

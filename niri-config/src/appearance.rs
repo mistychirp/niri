@@ -1065,6 +1065,8 @@ pub struct BackgroundEffectRule {
     pub noise: Option<FloatOrInt<0, 1000>>,
     #[knuffel(child, unwrap(argument))]
     pub saturation: Option<FloatOrInt<0, 1000>>,
+    #[knuffel(child, unwrap(argument))]
+    pub glass: Option<bool>,
 }
 
 /// Resolved background effect rule.
@@ -1087,11 +1089,16 @@ pub struct BackgroundEffect {
 
     pub noise: Option<f64>,
     pub saturation: Option<f64>,
+
+    /// Whether to render the background as liquid glass (macshell).
+    ///
+    /// Glass refracts what's actually behind the surface, so it always disables xray.
+    pub glass: Option<bool>,
 }
 
 impl MergeWith<BackgroundEffectRule> for BackgroundEffect {
     fn merge_with(&mut self, part: &BackgroundEffectRule) {
-        merge_clone_opt!((self, part), xray, blur);
+        merge_clone_opt!((self, part), xray, blur, glass);
 
         if let Some(x) = part.noise {
             self.noise = Some(x.0);
