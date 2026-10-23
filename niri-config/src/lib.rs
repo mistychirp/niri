@@ -1642,6 +1642,17 @@ mod tests {
                 offset: 3.0,
                 noise: 0.02,
                 saturation: 1.5,
+                glass: Glass {
+                    bezel: 20.0,
+                    refraction: 16.0,
+                    highlight: 0.35,
+                    tint: Color {
+                        r: 1.0,
+                        g: 1.0,
+                        b: 1.0,
+                        a: 0.0,
+                    },
+                },
             },
             gestures: Gestures {
                 dnd_edge_view_scroll: DndEdgeViewScroll {

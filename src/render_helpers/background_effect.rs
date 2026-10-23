@@ -207,7 +207,14 @@ impl BackgroundEffect {
             // Render non-xray effect.
             let elem = self
                 .nonxray
-                .render(ns, params, blur_options, noise, saturation, self.options.glass);
+                .render(
+                ns,
+                params,
+                blur_options,
+                noise,
+                saturation,
+                self.options.glass.then_some(self.blur_config.glass),
+            );
             push(elem.into());
         }
     }

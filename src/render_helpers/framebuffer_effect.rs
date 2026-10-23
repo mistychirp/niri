@@ -38,17 +38,9 @@ pub struct FramebufferEffectElement {
     blur_options: Option<BlurOptions>,
     noise: f32,
     saturation: f32,
-    glass: bool,
+    /// Render as liquid glass with these settings instead of plain postprocessing.
+    glass: Option<niri_config::Glass>,
 }
-
-/// Width of the curved glass rim, in logical pixels.
-const GLASS_BEZEL: f32 = 14.;
-/// How far the rim bends the background at its outer edge, in logical pixels.
-const GLASS_REFRACTION: f32 = 10.;
-/// Strength of the specular highlight along the rim.
-const GLASS_HIGHLIGHT: f32 = 0.35;
-/// Premultiplied white tint over the glass.
-const GLASS_TINT: [f32; 4] = [0.06, 0.06, 0.06, 0.06];
 
 #[derive(Debug)]
 struct Inner {
@@ -78,7 +70,7 @@ impl FramebufferEffect {
         blur_options: Option<BlurOptions>,
         noise: f32,
         saturation: f32,
-        glass: bool,
+        glass: Option<niri_config::Glass>,
     ) -> FramebufferEffectElement {
         let (clip_geo, corner_radius) = params
             .clip
@@ -144,6 +136,7 @@ impl FramebufferEffectElement {
 
     fn compute_glass_uniforms(
         &self,
+        glass: niri_config::Glass,
         crop: Rectangle<f64, Logical>,
         transform: Transform,
     ) -> [Uniform<'static>; 12] {
@@ -156,10 +149,10 @@ impl FramebufferEffectElement {
             Uniform::new("corner_radius", <[f32; 4]>::from(self.corner_radius)),
             mat3_uniform("input_to_geo", input_to_clip_geo),
             mat3_uniform("geo_to_input", input_to_clip_geo.inverse()),
-            Uniform::new("bezel", GLASS_BEZEL),
-            Uniform::new("refraction", GLASS_REFRACTION),
-            Uniform::new("highlight", GLASS_HIGHLIGHT),
-            Uniform::new("glass_tint", GLASS_TINT),
+            Uniform::new("bezel", glass.bezel as f32),
+            Uniform::new("refraction", glass.refraction as f32),
+            Uniform::new("highlight", glass.highlight as f32),
+            Uniform::new("glass_tint", glass.tint.to_array_premul()),
             Uniform::new("noise", self.noise),
             Uniform::new("saturation", self.saturation),
             Uniform::new("bg_color", [0f32, 0., 0., 0.]),
@@ -428,16 +421,17 @@ impl RenderElement<GlesRenderer> for FramebufferEffectElement {
         );
 
         let shaders = Shaders::get_from_frame(frame);
-        let glass_program = shaders.glass.clone().filter(|_| self.glass);
-        let program = glass_program
-            .clone()
-            .or_else(|| shaders.postprocess_and_clip.clone());
+        let glass = Option::zip(shaders.glass.clone(), self.glass);
+        let program = match &glass {
+            Some((program, _)) => Some(program.clone()),
+            None => shaders.postprocess_and_clip.clone(),
+        };
 
         let transform = frame.transformation();
         let glass_uniforms;
         let plain_uniforms;
-        let uniforms: &[Uniform<'_>] = if glass_program.is_some() {
-            glass_uniforms = self.compute_glass_uniforms(crop, transform);
+        let uniforms: &[Uniform<'_>] = if let Some((_, settings)) = glass {
+            glass_uniforms = self.compute_glass_uniforms(settings, crop, transform);
             &glass_uniforms
         } else if program.is_some() {
             plain_uniforms = self.compute_uniforms(crop, transform);

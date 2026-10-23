@@ -1013,6 +1013,7 @@ pub struct Blur {
     pub offset: f64,
     pub noise: f64,
     pub saturation: f64,
+    pub glass: Glass,
 }
 
 impl Default for Blur {
@@ -1023,7 +1024,53 @@ impl Default for Blur {
             offset: 3.,
             noise: 0.02,
             saturation: 1.5,
+            glass: Glass::default(),
         }
+    }
+}
+
+/// Look of the liquid glass background effect (macshell).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Glass {
+    /// Width of the curved rim, in logical pixels.
+    pub bezel: f64,
+    /// How far the rim bends the background at its outer edge, in logical pixels.
+    ///
+    /// Positive values pull content in from the center, like a real convex rim.
+    pub refraction: f64,
+    /// Strength of the specular highlight along the rim.
+    pub highlight: f64,
+    /// Tint layered over the glass.
+    pub tint: Color,
+}
+
+impl Default for Glass {
+    fn default() -> Self {
+        Self {
+            bezel: 20.,
+            refraction: 16.,
+            highlight: 0.35,
+            tint: Color::new_unpremul(1., 1., 1., 0.),
+        }
+    }
+}
+
+#[derive(knuffel::Decode, Debug, Default, Clone, Copy, PartialEq)]
+pub struct GlassPart {
+    #[knuffel(child, unwrap(argument))]
+    pub bezel: Option<FloatOrInt<0, 1000>>,
+    #[knuffel(child, unwrap(argument))]
+    pub refraction: Option<FloatOrInt<-1000, 1000>>,
+    #[knuffel(child, unwrap(argument))]
+    pub highlight: Option<FloatOrInt<0, 100>>,
+    #[knuffel(child)]
+    pub tint: Option<Color>,
+}
+
+impl MergeWith<GlassPart> for Glass {
+    fn merge_with(&mut self, part: &GlassPart) {
+        merge!((self, part), bezel, refraction, highlight);
+        merge_clone!((self, part), tint);
     }
 }
 
@@ -1041,6 +1088,8 @@ pub struct BlurPart {
     pub noise: Option<FloatOrInt<0, 1000>>,
     #[knuffel(child, unwrap(argument))]
     pub saturation: Option<FloatOrInt<0, 1000>>,
+    #[knuffel(child)]
+    pub glass: Option<GlassPart>,
 }
 
 impl MergeWith<BlurPart> for Blur {
@@ -1051,7 +1100,7 @@ impl MergeWith<BlurPart> for Blur {
         }
 
         merge_clone!((self, part), passes);
-        merge!((self, part), offset, noise, saturation);
+        merge!((self, part), offset, noise, saturation, glass);
     }
 }
 
