@@ -8,6 +8,7 @@ use wayland_server::protocol::wl_surface::WlSurface;
 
 use crate::handlers::background_effect::get_cached_blur_region;
 use crate::niri_render_elements;
+use crate::protocols::macshell_glass::GlassCachedState;
 use crate::render_helpers::blur::BlurOptions;
 use crate::render_helpers::damage::ExtraDamage;
 use crate::render_helpers::framebuffer_effect::{FramebufferEffect, FramebufferEffectElement};
@@ -287,6 +288,92 @@ impl SurfaceBackgroundEffect {
     }
 }
 
+/// Per-surface glass effects from macshell-glass-v1, one per shape.
+#[derive(Default)]
+struct SurfaceGlass(Mutex<SurfaceGlassInner>);
+
+#[derive(Default)]
+struct SurfaceGlassInner {
+    effects: Vec<FramebufferEffect>,
+    /// Config the effects were last rendered with, to damage them when it changes.
+    config: Option<niri_config::Blur>,
+}
+
+pub fn damage_glass(states: &SurfaceData) {
+    if let Some(glass) = states.data_map.get::<SurfaceGlass>() {
+        for effect in &mut glass.0.lock().unwrap().effects {
+            effect.damage();
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_glass_shapes(
+    ns: Option<usize>,
+    geometry: Rectangle<f64, Logical>,
+    scale: f64,
+    states: &SurfaceData,
+    surface_geo: Rectangle<f64, Logical>,
+    surface_anim_scale: Scale<f64>,
+    blur_config: niri_config::Blur,
+    push: &mut dyn FnMut(BackgroundEffectElement),
+) {
+    let mut cached = states.cached_state.get::<GlassCachedState>();
+    let shapes = &cached.current().shapes;
+    if shapes.is_empty() {
+        return;
+    }
+
+    let glass = states.data_map.get_or_insert(SurfaceGlass::default);
+    let mut glass = glass.0.lock().unwrap();
+    let glass = &mut *glass;
+
+    glass.effects.resize_with(shapes.len(), FramebufferEffect::new);
+    if glass.config != Some(blur_config) {
+        glass.config = Some(blur_config);
+        for effect in &mut glass.effects {
+            effect.damage();
+        }
+    }
+
+    // Same transform as blur subregions: surface-local, then animation scale, then position.
+    let offset = surface_geo.loc.upscale(surface_anim_scale) + geometry.loc;
+    let radius_scale = surface_anim_scale.x.min(surface_anim_scale.y) as f32;
+
+    for (shape, effect) in shapes.iter().zip(&glass.effects) {
+        let rect = shape.rect.to_f64();
+        let a = rect.loc.upscale(surface_anim_scale) + offset;
+        let b = (rect.loc + rect.size.to_point()).upscale(surface_anim_scale) + offset;
+        let geo = Rectangle::from_extremities(a, b)
+            .to_physical_precise_round(scale)
+            .to_logical(scale);
+
+        let radius = CornerRadius::from(shape.radius * radius_scale)
+            .fit_to(geo.size.w as f32, geo.size.h as f32);
+
+        let frosted = shape.frosted && !blur_config.off;
+        let params = RenderParams {
+            geometry: geo,
+            subregion: None,
+            clip: Some((geo, radius)),
+            scale,
+        };
+        let elem = effect.render(
+            ns,
+            params,
+            frosted.then(|| BlurOptions::from(blur_config)),
+            if frosted { blur_config.noise as f32 } else { 0. },
+            if frosted {
+                blur_config.saturation as f32
+            } else {
+                1.
+            },
+            Some(blur_config.glass),
+        );
+        push(elem.into());
+    }
+}
+
 pub fn damage_surface(states: &SurfaceData) {
     if let Some(effect) = states.data_map.get::<SurfaceBackgroundEffect>() {
         effect.0.lock().unwrap().damage();
@@ -313,6 +400,22 @@ pub fn render_for_tile(
     push: &mut dyn FnMut(BackgroundEffectElement),
 ) {
     with_states(surface, |states| {
+        // Glass requested through macshell-glass-v1 renders regardless of rules.
+        if !should_block_out {
+            let mut surface_geo = surface_geo(states).unwrap_or_default().to_f64();
+            surface_geo.loc += surface_off;
+            render_glass_shapes(
+                ns,
+                geometry,
+                scale,
+                states,
+                surface_geo,
+                surface_anim_scale,
+                blur_config,
+                push,
+            );
+        }
+
         let background_effect = SurfaceBackgroundEffect::get(states);
         let mut background_effect = background_effect.0.lock().unwrap();
 

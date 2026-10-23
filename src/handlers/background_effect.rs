@@ -10,7 +10,9 @@ use smithay::wayland::compositor::{
     add_post_commit_hook, with_states, RegionAttributes, SurfaceData,
 };
 
+use crate::delegate_macshell_glass;
 use crate::niri::State;
+use crate::protocols::macshell_glass::MacshellGlassHandler;
 use crate::utils::region::region_to_non_overlapping_rects;
 
 /// Per-surface cache for processed blur region (non-overlapping rects).
@@ -121,3 +123,40 @@ impl ExtBackgroundEffectHandler for State {
     }
 }
 delegate_background_effect!(State);
+
+/// Tracks macshell-glass-v1 changes waiting for a surface commit.
+#[derive(Default)]
+struct GlassCommitTracker(Mutex<GlassCommitTrackerInner>);
+
+#[derive(Default)]
+struct GlassCommitTrackerInner {
+    pending_dirty: bool,
+    hook_registered: bool,
+}
+
+impl MacshellGlassHandler for State {
+    fn glass_pending(&mut self, surface: &WlSurface) {
+        let register_hook = with_states(surface, |states| {
+            let tracker = states
+                .data_map
+                .get_or_insert_threadsafe(GlassCommitTracker::default);
+            let mut guard = tracker.0.lock().unwrap();
+            guard.pending_dirty = true;
+            !std::mem::replace(&mut guard.hook_registered, true)
+        });
+
+        if register_hook {
+            add_post_commit_hook::<State, _>(surface, |_state, _dh, surface| {
+                with_states(surface, |states| {
+                    let Some(tracker) = states.data_map.get::<GlassCommitTracker>() else {
+                        return;
+                    };
+                    if std::mem::take(&mut tracker.0.lock().unwrap().pending_dirty) {
+                        crate::render_helpers::background_effect::damage_glass(states);
+                    }
+                });
+            });
+        }
+    }
+}
+delegate_macshell_glass!(State);

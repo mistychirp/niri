@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="macshell_glass_v1">
+  <copyright>
+    Copyright © 2026 the macshell-x contributors
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the "Software"),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice (including the next
+    paragraph) shall be included in all copies or substantial portions of the
+    Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+    THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+  </copyright>
+
+  <description summary="liquid glass behind surfaces">
+    This protocol lets a client ask the compositor to render liquid glass
+    behind parts of its surfaces: the background is refracted along a curved
+    rim, optionally frosted, and lit by a specular highlight. The look of the
+    glass (rim width, refraction strength, highlight, tint) is compositor
+    policy; clients only describe where the glass goes.
+
+    The presence of the macshell_glass_manager_v1 global tells clients that
+    glass is available.
+  </description>
+
+  <interface name="macshell_glass_manager_v1" version="1">
+    <description summary="glass factory">
+      Creates glass objects for surfaces.
+    </description>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the glass manager">
+        Existing glass objects are not affected.
+      </description>
+    </request>
+
+    <enum name="error">
+      <entry name="glass_exists" value="0"
+             summary="the surface already has a glass object"/>
+    </enum>
+
+    <request name="get_glass">
+      <description summary="get the glass object for a surface">
+        Creates a glass object for the given surface. If the surface already
+        has one, the glass_exists protocol error is raised.
+      </description>
+      <arg name="id" type="new_id" interface="macshell_glass_v1"/>
+      <arg name="surface" type="object" interface="wl_surface"/>
+    </request>
+  </interface>
+
+  <interface name="macshell_glass_v1" version="1">
+    <description summary="glass shapes behind a surface">
+      Holds a list of glass shapes rendered behind the surface. The list is
+      double-buffered state, applied on the next wl_surface.commit, and starts
+      out empty.
+
+      Requests only change the pending list, which persists across commits.
+      To replace the shapes, send clear, then add each shape, then commit.
+
+      If the surface is destroyed, this object becomes inert.
+    </description>
+
+    <request name="destroy" type="destructor">
+      <description summary="remove the glass">
+        The glass is removed on the next commit of the surface.
+      </description>
+    </request>
+
+    <enum name="error">
+      <entry name="invalid_shape" value="0"
+             summary="a shape has a non-positive width or height"/>
+    </enum>
+
+    <enum name="style">
+      <entry name="clear" value="0"
+             summary="refraction only; the background stays sharp"/>
+      <entry name="frosted" value="1"
+             summary="refraction over a blurred background"/>
+    </enum>
+
+    <request name="clear">
+      <description summary="remove all pending shapes"/>
+    </request>
+
+    <request name="add_rounded_rect">
+      <description summary="add a rounded rectangle of glass">
+        Appends a rounded rectangle to the pending list, in surface-local
+        logical coordinates. The radius is clamped to half the smaller side.
+        Shapes should not overlap; overlapping glass is rendered twice.
+
+        A non-positive width or height raises the invalid_shape protocol
+        error.
+      </description>
+      <arg name="x" type="int"/>
+      <arg name="y" type="int"/>
+      <arg name="width" type="int"/>
+      <arg name="height" type="int"/>
+      <arg name="radius" type="uint" summary="corner radius in logical pixels"/>
+      <arg name="style" type="uint" enum="style"/>
+    </request>
+  </interface>
+</protocol>
