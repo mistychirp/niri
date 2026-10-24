@@ -8,7 +8,7 @@ use wayland_server::protocol::wl_surface::WlSurface;
 
 use crate::handlers::background_effect::get_cached_blur_region;
 use crate::niri_render_elements;
-use crate::protocols::macshell_glass::{self, GlassCachedState};
+use crate::protocols::macshell_glass::{self, GlassCachedState, GlassStyle};
 use crate::render_helpers::blur::BlurOptions;
 use crate::render_helpers::damage::ExtraDamage;
 use crate::render_helpers::framebuffer_effect::{FramebufferEffect, FramebufferEffectElement};
@@ -345,6 +345,13 @@ fn render_glass_shapes(
     let mut probe = macshell_glass::brightness_probe(states);
 
     for (shape, effect) in shapes.iter().zip(&glass.effects) {
+        let probe = probe.take();
+        let transparent = shape.style == GlassStyle::Transparent;
+        // A transparent shape is only there to be measured.
+        if transparent && probe.is_none() {
+            continue;
+        }
+
         let rect = shape.rect.to_f64();
         let a = rect.loc.upscale(surface_anim_scale) + offset;
         let b = (rect.loc + rect.size.to_point()).upscale(surface_anim_scale) + offset;
@@ -355,7 +362,7 @@ fn render_glass_shapes(
         let radius = CornerRadius::from(shape.radius * radius_scale)
             .fit_to(geo.size.w as f32, geo.size.h as f32);
 
-        let frosted = shape.frosted && !blur_config.off;
+        let frosted = shape.style == GlassStyle::Frosted && !blur_config.off;
         let frost = blur_config.glass.frost;
         let params = RenderParams {
             geometry: geo,
@@ -373,8 +380,9 @@ fn render_glass_shapes(
             if frosted { frost.noise as f32 } else { 0. },
             if frosted { frost.saturation as f32 } else { 1. },
             Some(blur_config.glass),
-            probe.take(),
-        );
+            probe,
+        )
+        .hidden(transparent);
         push(elem.into());
     }
 }

@@ -91,6 +91,8 @@
              summary="refraction only; the background stays sharp"/>
       <entry name="frosted" value="1"
              summary="refraction over a blurred background"/>
+      <entry name="transparent" value="2" since="2"
+             summary="nothing is drawn; the shape only marks where track_brightness measures"/>
     </enum>
 
     <request name="clear">

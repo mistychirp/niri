@@ -26,7 +26,15 @@ pub struct GlassShape {
     /// Surface-local logical rectangle.
     pub rect: Rectangle<i32, Logical>,
     pub radius: f32,
-    pub frosted: bool,
+    pub style: GlassStyle,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GlassStyle {
+    Clear,
+    Frosted,
+    /// Nothing is drawn; the shape only marks where brightness is measured.
+    Transparent,
 }
 
 /// Double-buffered glass shapes of a surface.
@@ -231,11 +239,15 @@ where
                     return;
                 }
 
-                let frosted = matches!(style.into_result(), Ok(macshell_glass_v1::Style::Frosted));
+                let style = match style.into_result() {
+                    Ok(macshell_glass_v1::Style::Frosted) => GlassStyle::Frosted,
+                    Ok(macshell_glass_v1::Style::Transparent) => GlassStyle::Transparent,
+                    _ => GlassStyle::Clear,
+                };
                 let shape = GlassShape {
                     rect: Rectangle::new((x, y).into(), (width, height).into()),
                     radius: radius as f32,
-                    frosted,
+                    style,
                 };
                 edit_pending(&surface, |shapes| shapes.push(shape));
             }

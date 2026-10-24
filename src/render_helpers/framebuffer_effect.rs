@@ -44,6 +44,8 @@ pub struct FramebufferEffectElement {
     glass: Option<niri_config::Glass>,
     /// Measures how bright the captured background is, for a client that adapts to it.
     probe: Option<BrightnessProbe>,
+    /// Capture (and measure) without drawing anything.
+    hidden: bool,
 }
 
 /// How bright the background behind a framebuffer effect is, measured now and then while
@@ -139,11 +141,17 @@ impl FramebufferEffect {
             saturation,
             glass,
             probe,
+            hidden: false,
         }
     }
 }
 
 impl FramebufferEffectElement {
+    pub fn hidden(mut self, hidden: bool) -> Self {
+        self.hidden = hidden;
+        self
+    }
+
     fn input_to_geo(&self, crop: Rectangle<f64, Logical>, transform: Transform) -> Mat3 {
         let offset = crop.loc - (self.clip_geo.loc - self.geometry.loc);
         let offset = Vec2::new(offset.x as f32, offset.y as f32);
@@ -433,6 +441,9 @@ impl RenderElement<GlesRenderer> for FramebufferEffectElement {
         let Some(cache) = cache else {
             return Ok(());
         };
+        if self.hidden {
+            return Ok(());
+        }
         let Some(inner) = cache.get::<RefCell<Inner>>() else {
             return Ok(());
         };
