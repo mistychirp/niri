@@ -352,6 +352,7 @@ fn render_glass_shapes(
             .fit_to(geo.size.w as f32, geo.size.h as f32);
 
         let frosted = shape.frosted && !blur_config.off;
+        let frost = blur_config.glass.frost;
         let params = RenderParams {
             geometry: geo,
             subregion: None,
@@ -361,13 +362,12 @@ fn render_glass_shapes(
         let elem = effect.render(
             ns,
             params,
-            frosted.then(|| BlurOptions::from(blur_config)),
-            if frosted { blur_config.noise as f32 } else { 0. },
-            if frosted {
-                blur_config.saturation as f32
-            } else {
-                1.
-            },
+            frosted.then_some(BlurOptions {
+                passes: frost.passes,
+                offset: frost.offset,
+            }),
+            if frosted { frost.noise as f32 } else { 0. },
+            if frosted { frost.saturation as f32 } else { 1. },
             Some(blur_config.glass),
         );
         push(elem.into());

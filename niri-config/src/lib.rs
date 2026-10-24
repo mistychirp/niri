@@ -1652,6 +1652,12 @@ mod tests {
                         b: 1.0,
                         a: 0.0,
                     },
+                    frost: Frost {
+                        passes: 2,
+                        offset: 2.0,
+                        noise: 0.0,
+                        saturation: 1.8,
+                    },
                 },
             },
             gestures: Gestures {

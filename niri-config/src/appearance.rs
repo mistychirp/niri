@@ -1042,6 +1042,8 @@ pub struct Glass {
     pub highlight: f64,
     /// Tint layered over the glass.
     pub tint: Color,
+    /// The blur under frosted glass, separate from window blur.
+    pub frost: Frost,
 }
 
 impl Default for Glass {
@@ -1051,7 +1053,48 @@ impl Default for Glass {
             refraction: 16.,
             highlight: 0.35,
             tint: Color::new_unpremul(1., 1., 1., 0.),
+            frost: Frost::default(),
         }
+    }
+}
+
+/// The blur under frosted glass (macshell): lighter than window blur and more vivid, like
+/// macOS's regular Liquid Glass.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Frost {
+    pub passes: u8,
+    pub offset: f64,
+    pub noise: f64,
+    pub saturation: f64,
+}
+
+impl Default for Frost {
+    fn default() -> Self {
+        Self {
+            passes: 2,
+            offset: 2.,
+            noise: 0.,
+            saturation: 1.8,
+        }
+    }
+}
+
+#[derive(knuffel::Decode, Debug, Default, Clone, Copy, PartialEq)]
+pub struct FrostPart {
+    #[knuffel(child, unwrap(argument))]
+    pub passes: Option<u8>,
+    #[knuffel(child, unwrap(argument))]
+    pub offset: Option<FloatOrInt<0, 100>>,
+    #[knuffel(child, unwrap(argument))]
+    pub noise: Option<FloatOrInt<0, 1000>>,
+    #[knuffel(child, unwrap(argument))]
+    pub saturation: Option<FloatOrInt<0, 1000>>,
+}
+
+impl MergeWith<FrostPart> for Frost {
+    fn merge_with(&mut self, part: &FrostPart) {
+        merge_clone!((self, part), passes);
+        merge!((self, part), offset, noise, saturation);
     }
 }
 
@@ -1065,11 +1108,13 @@ pub struct GlassPart {
     pub highlight: Option<FloatOrInt<0, 100>>,
     #[knuffel(child)]
     pub tint: Option<Color>,
+    #[knuffel(child)]
+    pub frost: Option<FrostPart>,
 }
 
 impl MergeWith<GlassPart> for Glass {
     fn merge_with(&mut self, part: &GlassPart) {
-        merge!((self, part), bezel, refraction, highlight);
+        merge!((self, part), bezel, refraction, highlight, frost);
         merge_clone!((self, part), tint);
     }
 }
