@@ -75,10 +75,15 @@ void main() {
     );
     n = length(n) > 0.0 ? normalize(n) : vec2(0.0);
 
+    // Thin shapes, like a menu bar, get a proportionally thinner rim, so it doesn't swallow
+    // the whole shape.
+    float rim_width = max(min(bezel, 0.3 * min(geo_size.x, geo_size.y)), 0.001);
+    float rim_refraction = refraction * rim_width / max(bezel, 0.001);
+
     // 0 at the outer edge, 1 where the rim meets the flat top.
-    float t = clamp(-d / max(bezel, 0.001), 0.0, 1.0);
+    float t = clamp(-d / rim_width, 0.0, 1.0);
     // A convex rim is steepest at the edge, so it bends light the most there.
-    float bend = refraction * pow(1.0 - t, 2.5);
+    float bend = rim_refraction * pow(1.0 - t, 2.5);
 
     // Light refracts toward the center, so the rim shows content from further in.
     // Channels bend slightly differently for a hint of dispersion.
