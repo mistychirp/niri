@@ -1,4 +1,6 @@
 use std::cell::RefCell;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use glam::{Mat3, Vec2};
 use niri_config::CornerRadius;
@@ -40,11 +42,53 @@ pub struct FramebufferEffectElement {
     saturation: f32,
     /// Render as liquid glass with these settings instead of plain postprocessing.
     glass: Option<niri_config::Glass>,
+    /// Measures how bright the captured background is, for a client that adapts to it.
+    probe: Option<BrightnessProbe>,
+}
+
+/// How bright the background behind a framebuffer effect is, measured now and then while
+/// capturing it (macshell-glass brightness tracking).
+#[derive(Debug, Clone, Default)]
+pub struct BrightnessProbe(Arc<Mutex<ProbeState>>);
+
+#[derive(Debug, Default)]
+struct ProbeState {
+    measured_at: Option<Instant>,
+    luminance: Option<f32>,
+}
+
+/// Reading pixels back stalls the GPU, so measure at most this often.
+const PROBE_INTERVAL: Duration = Duration::from_millis(500);
+/// Size the background is downsampled to before reading it back.
+const PROBE_SIZE: (i32, i32) = (32, 4);
+
+impl BrightnessProbe {
+    /// The latest average relative luminance, from 0 to 1.
+    pub fn luminance(&self) -> Option<f32> {
+        self.0.lock().unwrap().luminance
+    }
+
+    fn is_due(&self) -> bool {
+        let state = self.0.lock().unwrap();
+        state
+            .measured_at
+            .is_none_or(|at| at.elapsed() >= PROBE_INTERVAL)
+    }
+
+    fn record(&self, luminance: Option<f32>) {
+        let mut state = self.0.lock().unwrap();
+        state.measured_at = Some(Instant::now());
+        if luminance.is_some() {
+            state.luminance = luminance;
+        }
+    }
 }
 
 #[derive(Debug)]
 struct Inner {
     framebuffer: Option<GlesTexture>,
+    /// The downsampled background, for brightness probes.
+    probe_texture: Option<GlesTexture>,
     blur: Option<Blur>,
     intermediate: Option<GlesTexture>,
     /// Reusable storage for subregion-filtered damage rects.
@@ -71,6 +115,7 @@ impl FramebufferEffect {
         noise: f32,
         saturation: f32,
         glass: Option<niri_config::Glass>,
+        probe: Option<BrightnessProbe>,
     ) -> FramebufferEffectElement {
         let (clip_geo, corner_radius) = params
             .clip
@@ -93,6 +138,7 @@ impl FramebufferEffect {
             noise,
             saturation,
             glass,
+            probe,
         }
     }
 }
@@ -277,6 +323,24 @@ impl RenderElement<GlesRenderer> for FramebufferEffectElement {
                 }
             }
 
+            // A probe that's due gets its own small texture to downsample into.
+            let probe = self.probe.as_ref().filter(|probe| probe.is_due());
+            let probe_texture = match (probe, &inner.probe_texture) {
+                (None, _) => None,
+                (Some(_), Some(texture)) => Some(texture.clone()),
+                (Some(_), None) => {
+                    let (w, h) = PROBE_SIZE;
+                    let renderer = guard.as_mut();
+                    match renderer.create_buffer(Fourcc::Abgr8888, (w, h).into()) {
+                        Ok(texture) => Some(inner.probe_texture.insert(texture).clone()),
+                        Err(err) => {
+                            warn!("error creating brightness probe texture: {err:?}");
+                            None
+                        }
+                    }
+                }
+            };
+
             // We can't use renderer.with_context() as that will reset the GlesFrame binding that we
             // want to blit from.
             drop(guard);
@@ -328,6 +392,13 @@ impl RenderElement<GlesRenderer> for FramebufferEffectElement {
                     Ok(())
                 }
             })??;
+
+            if let (Some(probe), Some(probe_texture)) = (probe, probe_texture) {
+                let luminance = frame.with_context(|gl| unsafe {
+                    measure_luminance(gl, framebuffer, &probe_texture)
+                })?;
+                probe.record(luminance);
+            }
 
             // If blur is off, use the unblurred texture.
             if self.blur_options.is_none() {
@@ -491,10 +562,104 @@ impl<'render> RenderElement<TtyRenderer<'render>> for FramebufferEffectElement {
     }
 }
 
+/// Downsamples `source` into `probe` and reads it back: the average relative luminance of
+/// `source`, from 0 to 1.
+///
+/// # Safety
+///
+/// Must run inside the frame's GL context, with both textures from its renderer.
+unsafe fn measure_luminance(
+    gl: &ffi::Gles2,
+    source: &GlesTexture,
+    probe: &GlesTexture,
+) -> Option<f32> {
+    let (w, h) = PROBE_SIZE;
+    let source_size = source.size();
+
+    while gl.GetError() != ffi::NO_ERROR {}
+
+    let mut read_fbo = 0i32;
+    let mut draw_fbo = 0i32;
+    gl.GetIntegerv(ffi::READ_FRAMEBUFFER_BINDING, &mut read_fbo as *mut _);
+    gl.GetIntegerv(ffi::DRAW_FRAMEBUFFER_BINDING, &mut draw_fbo as *mut _);
+    gl.Disable(ffi::SCISSOR_TEST);
+
+    let mut fbos = [0u32; 2];
+    gl.GenFramebuffers(2, fbos.as_mut_ptr());
+    gl.BindFramebuffer(ffi::READ_FRAMEBUFFER, fbos[0]);
+    gl.FramebufferTexture2D(
+        ffi::READ_FRAMEBUFFER,
+        ffi::COLOR_ATTACHMENT0,
+        ffi::TEXTURE_2D,
+        source.tex_id(),
+        0,
+    );
+    gl.BindFramebuffer(ffi::DRAW_FRAMEBUFFER, fbos[1]);
+    gl.FramebufferTexture2D(
+        ffi::DRAW_FRAMEBUFFER,
+        ffi::COLOR_ATTACHMENT0,
+        ffi::TEXTURE_2D,
+        probe.tex_id(),
+        0,
+    );
+
+    // Each probe pixel averages a few source pixels; spread over the whole background, that's
+    // plenty to tell light from dark.
+    gl.BlitFramebuffer(
+        0,
+        0,
+        source_size.w,
+        source_size.h,
+        0,
+        0,
+        w,
+        h,
+        ffi::COLOR_BUFFER_BIT,
+        ffi::LINEAR,
+    );
+
+    let mut pixels = vec![0u8; (w * h * 4) as usize];
+    gl.BindFramebuffer(ffi::READ_FRAMEBUFFER, fbos[1]);
+    gl.ReadPixels(
+        0,
+        0,
+        w,
+        h,
+        ffi::RGBA,
+        ffi::UNSIGNED_BYTE,
+        pixels.as_mut_ptr().cast(),
+    );
+
+    gl.BindFramebuffer(ffi::READ_FRAMEBUFFER, read_fbo as u32);
+    gl.BindFramebuffer(ffi::DRAW_FRAMEBUFFER, draw_fbo as u32);
+    gl.Enable(ffi::SCISSOR_TEST);
+    gl.DeleteFramebuffers(2, fbos.as_ptr());
+
+    if gl.GetError() != ffi::NO_ERROR {
+        return None;
+    }
+
+    // The framebuffer holds sRGB-encoded colors; luminance needs them linear.
+    let linear = |c: u8| {
+        let c = f32::from(c) / 255.;
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let total: f32 = pixels
+        .chunks_exact(4)
+        .map(|p| 0.2126 * linear(p[0]) + 0.7152 * linear(p[1]) + 0.0722 * linear(p[2]))
+        .sum();
+    Some(total / (w * h) as f32)
+}
+
 impl Inner {
     fn new(renderer: &mut GlesRenderer) -> Self {
         Inner {
             framebuffer: None,
+            probe_texture: None,
             blur: Blur::new(renderer),
             intermediate: None,
             subregion_damage: Vec::new(),

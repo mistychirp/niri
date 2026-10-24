@@ -8,14 +8,18 @@ use smithay::reexports::wayland_server::{
     Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource, Weak,
 };
 use smithay::utils::{Logical, Rectangle};
-use smithay::wayland::compositor::{self, Cacheable};
+use smithay::wayland::compositor::{self, Cacheable, SurfaceData};
 
 use super::raw::macshell_glass::v1::server::macshell_glass_manager_v1::{
     self, MacshellGlassManagerV1,
 };
 use super::raw::macshell_glass::v1::server::macshell_glass_v1::{self, MacshellGlassV1};
+use crate::render_helpers::framebuffer_effect::BrightnessProbe;
 
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
+
+/// How much the luminance (out of 1000) has to change before clients hear about it.
+const BRIGHTNESS_STEP: u32 = 20;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GlassShape {
@@ -44,6 +48,58 @@ impl Cacheable for GlassCachedState {
 /// Marks a surface that already has a glass object.
 #[derive(Default)]
 struct GlassAttached(Mutex<bool>);
+
+/// Brightness tracking for a surface whose glass object asked for it.
+#[derive(Default)]
+struct BrightnessTracking(Mutex<Option<Tracker>>);
+
+struct Tracker {
+    glass: MacshellGlassV1,
+    probe: BrightnessProbe,
+    /// The last luminance sent, out of 1000.
+    sent: Option<u32>,
+}
+
+/// The probe to measure the surface's background with, if its client tracks brightness.
+pub fn brightness_probe(states: &SurfaceData) -> Option<BrightnessProbe> {
+    let tracking = states.data_map.get::<BrightnessTracking>()?;
+    let tracking = tracking.0.lock().unwrap();
+    tracking.as_ref().map(|tracker| tracker.probe.clone())
+}
+
+/// Sends the latest measured brightness, if it changed noticeably since the last one sent.
+pub fn report_brightness(states: &SurfaceData) {
+    let Some(tracking) = states.data_map.get::<BrightnessTracking>() else {
+        return;
+    };
+    let mut tracking = tracking.0.lock().unwrap();
+    let Some(tracker) = tracking.as_mut() else {
+        return;
+    };
+    let Some(luminance) = tracker.probe.luminance() else {
+        return;
+    };
+    let luminance = (luminance.clamp(0., 1.) * 1000.).round() as u32;
+    if tracker
+        .sent
+        .is_some_and(|sent| sent.abs_diff(luminance) < BRIGHTNESS_STEP)
+    {
+        return;
+    }
+    if tracker.glass.is_alive() {
+        tracker.glass.brightness(luminance);
+    }
+    tracker.sent = Some(luminance);
+}
+
+fn set_tracking(surface: &WlSurface, tracker: Option<Tracker>) {
+    compositor::with_states(surface, |states| {
+        let tracking = states
+            .data_map
+            .get_or_insert_threadsafe(BrightnessTracking::default);
+        *tracking.0.lock().unwrap() = tracker;
+    });
+}
 
 pub struct GlassUserData(Weak<WlSurface>);
 
@@ -183,6 +239,17 @@ where
                 };
                 edit_pending(&surface, |shapes| shapes.push(shape));
             }
+            macshell_glass_v1::Request::TrackBrightness => {
+                set_tracking(
+                    &surface,
+                    Some(Tracker {
+                        glass: glass.clone(),
+                        probe: BrightnessProbe::default(),
+                        sent: None,
+                    }),
+                );
+                // Measuring happens while rendering, so make sure the glass renders soon.
+            }
             // Handled in destroyed(), which also covers clients that disconnect.
             macshell_glass_v1::Request::Destroy => return,
         }
@@ -195,6 +262,7 @@ where
             return;
         };
         set_attached(&surface, false);
+        set_tracking(&surface, None);
         edit_pending(&surface, Vec::clear);
         state.glass_pending(&surface);
     }

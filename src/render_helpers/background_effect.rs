@@ -8,7 +8,7 @@ use wayland_server::protocol::wl_surface::WlSurface;
 
 use crate::handlers::background_effect::get_cached_blur_region;
 use crate::niri_render_elements;
-use crate::protocols::macshell_glass::GlassCachedState;
+use crate::protocols::macshell_glass::{self, GlassCachedState};
 use crate::render_helpers::blur::BlurOptions;
 use crate::render_helpers::damage::ExtraDamage;
 use crate::render_helpers::framebuffer_effect::{FramebufferEffect, FramebufferEffectElement};
@@ -215,6 +215,7 @@ impl BackgroundEffect {
                 noise,
                 saturation,
                 self.options.glass.then_some(self.blur_config.glass),
+                None,
             );
             push(elem.into());
         }
@@ -340,6 +341,9 @@ fn render_glass_shapes(
     let offset = surface_geo.loc.upscale(surface_anim_scale) + geometry.loc;
     let radius_scale = surface_anim_scale.x.min(surface_anim_scale.y) as f32;
 
+    // Brightness tracking measures behind the first shape.
+    let mut probe = macshell_glass::brightness_probe(states);
+
     for (shape, effect) in shapes.iter().zip(&glass.effects) {
         let rect = shape.rect.to_f64();
         let a = rect.loc.upscale(surface_anim_scale) + offset;
@@ -369,6 +373,7 @@ fn render_glass_shapes(
             if frosted { frost.noise as f32 } else { 0. },
             if frosted { frost.saturation as f32 } else { 1. },
             Some(blur_config.glass),
+            probe.take(),
         );
         push(elem.into());
     }

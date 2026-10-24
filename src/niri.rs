@@ -147,7 +147,7 @@ use crate::niri_render_elements;
 use crate::protocols::ext_workspace::{self, ExtWorkspaceManagerState};
 use crate::protocols::foreign_toplevel::{self, ForeignToplevelManagerState};
 use crate::protocols::gamma_control::GammaControlManagerState;
-use crate::protocols::macshell_glass::MacshellGlassManagerState;
+use crate::protocols::macshell_glass::{self, MacshellGlassManagerState};
 use crate::protocols::mutter_x11_interop::MutterX11InteropManagerState;
 use crate::protocols::output_management::OutputManagementManagerState;
 use crate::protocols::screencopy::{Screencopy, ScreencopyBuffer, ScreencopyManagerState};
@@ -5073,6 +5073,9 @@ impl Niri {
                 FRAME_CALLBACK_THROTTLE,
                 should_send,
             );
+            // Glass brightness is measured while rendering, so this frame's measurement is ready
+            // now. (Only layer surfaces, like shell bars, track it.)
+            with_states(surface.wl_surface(), macshell_glass::report_brightness);
         }
 
         if let Some(surface) = &self.output_state[output].lock_surface {

@@ -32,9 +32,12 @@
 
     The presence of the macshell_glass_manager_v1 global tells clients that
     glass is available.
+
+    Since version 2, clients can also learn how bright the background behind
+    their glass is, to pick a text color that stays legible over it.
   </description>
 
-  <interface name="macshell_glass_manager_v1" version="1">
+  <interface name="macshell_glass_manager_v1" version="2">
     <description summary="glass factory">
       Creates glass objects for surfaces.
     </description>
@@ -60,7 +63,7 @@
     </request>
   </interface>
 
-  <interface name="macshell_glass_v1" version="1">
+  <interface name="macshell_glass_v1" version="2">
     <description summary="glass shapes behind a surface">
       Holds a list of glass shapes rendered behind the surface. The list is
       double-buffered state, applied on the next wl_surface.commit, and starts
@@ -110,5 +113,27 @@
       <arg name="radius" type="uint" summary="corner radius in logical pixels"/>
       <arg name="style" type="uint" enum="style"/>
     </request>
+
+    <request name="track_brightness" since="2">
+      <description summary="report the brightness behind the glass">
+        Asks the compositor to send brightness events for the background
+        behind the first shape in the list, as it is before the glass is
+        drawn over it. Tracking lasts until this object is destroyed.
+
+        Measuring has a cost, so only ask for it when the answer changes how
+        the surface is drawn.
+      </description>
+    </request>
+
+    <event name="brightness" since="2">
+      <description summary="brightness of the background behind the glass">
+        The average relative luminance of the background behind the first
+        shape, from 0 (black) to 1000 (white). Sent once a measurement is
+        available after track_brightness, then whenever it changes
+        noticeably. How often the compositor measures, and what counts as
+        noticeable, is compositor policy.
+      </description>
+      <arg name="luminance" type="uint" summary="relative luminance, 0 to 1000"/>
+    </event>
   </interface>
 </protocol>
